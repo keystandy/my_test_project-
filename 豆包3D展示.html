@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>豆包 3D 形象展示</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='55' r='38' fill='%234f8ef7'/%3E%3Ccircle cx='38' cy='48' r='6' fill='white'/%3E%3Ccircle cx='62' cy='48' r='6' fill='white'/%3E%3C/svg%3E">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  body { background: linear-gradient(180deg, #eaf3ff 0%, #f7faff 100%); }
+
+  #canvas-container { width: 100%; height: 100%; }
+  canvas { display: block; }
+
+  /* 顶部标题 */
+  .header {
+    position: fixed; top: 24px; left: 0; right: 0;
+    text-align: center; pointer-events: none; z-index: 10;
+  }
+  .header h1 { font-size: 22px; color: #2c4a7c; font-weight: 600; letter-spacing: 1px; }
+  .header p  { font-size: 13px; color: #6b89b8; margin-top: 6px; }
+
+  /* 控制按钮面板 */
+  .controls {
+    position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 10px; z-index: 10; flex-wrap: wrap; justify-content: center;
+    padding: 10px 14px; background: rgba(255,255,255,0.85); backdrop-filter: blur(12px);
+    border-radius: 16px; box-shadow: 0 8px 32px rgba(79,142,247,0.15);
+  }
+  .controls button {
+    padding: 9px 16px; border: none; border-radius: 10px; cursor: pointer;
+    background: #f0f5ff; color: #3a6bb8; font-size: 13px; font-weight: 500;
+    transition: all 0.2s; white-space: nowrap;
+  }
+  .controls button:hover { background: #dbe8ff; transform: translateY(-1px); }
+  .controls button.active { background: #4f8ef7; color: white; }
+  .controls button.icon-btn { padding: 9px 12px; }
+
+  /* 操作提示 */
+  .tips {
+    position: fixed; top: 24px; right: 24px; z-index: 10;
+    background: rgba(255,255,255,0.85); backdrop-filter: blur(12px);
+    padding: 12px 16px; border-radius: 12px; font-size: 12px; color: #6b89b8;
+    line-height: 1.9; box-shadow: 0 4px 20px rgba(79,142,247,0.1);
+  }
+  .tips b { color: #3a6bb8; }
+
+  @media (max-width: 600px) {
+    .header h1 { font-size: 18px; }
+    .tips { display: none; }
+    .controls { bottom: 16px; width: calc(100% - 24px); }
+    .controls button { padding: 8px 12px; font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>豆包 3D 形象</h1>
+  <p>拖拽旋转 · 滚轮缩放 · 右键平移</p>
+</div>
+
+<div class="tips">
+  <b>操作说明</b><br>
+  左键拖拽：旋转视角<br>
+  滚轮：放大 / 缩小<br>
+  右键拖拽：平移
+</div>
+
+<div id="canvas-container"></div>
+
+<div class="controls">
+  <button data-view="front" class="active">正面</button>
+  <button data-view="side">侧面</button>
+  <button data-view="back">背面</button>
+  <button data-view="top">俯视</button>
+  <button data-view="reset">复位</button>
+  <button id="auto-rotate" class="icon-btn">自动旋转：关</button>
+</div>
+
+<script src="https://fastly.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://fastly.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(function () {
+  // ========== 场景基础 ==========
+  var container = document.getElementById('canvas-container');
+  var scene = new THREE.Scene();
+  scene.background = null; // 用 CSS 渐变背景
+
+  var camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 100);
+  camera.position.set(0, 1.5, 7);
+
+  var renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  container.appendChild(renderer.domElement);
+
+  // ========== 灯光 ==========
+  // 环境光：基础照明
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+
+  // 主光（右上方，带阴影）
+  var keyLight = new THREE.DirectionalLight(0xffffff, 0.9);
+  keyLight.position.set(5, 8, 6);
+  keyLight.castShadow = true;
+  keyLight.shadow.mapSize.width = 2048;
+  keyLight.shadow.mapSize.height = 2048;
+  keyLight.shadow.camera.near = 0.5;
+  keyLight.shadow.camera.far = 30;
+  keyLight.shadow.camera.left = -8;
+  keyLight.shadow.camera.right = 8;
+  keyLight.shadow.camera.top = 8;
+  keyLight.shadow.camera.bottom = -8;
+  keyLight.shadow.bias = -0.001;
+  scene.add(keyLight);
+
+  // 补光（左前方，柔化暗部）
+  var fillLight = new THREE.DirectionalLight(0xd6e6ff, 0.4);
+  fillLight.position.set(-5, 3, 4);
+  scene.add(fillLight);
+
+  // 轮廓光（后方，勾勒轮廓）
+  var rimLight = new THREE.DirectionalLight(0x88b8ff, 0.5);
+  rimLight.position.set(0, 4, -6);
+  scene.add(rimLight);
+
+  // ========== 地面（接收阴影） ==========
+  var groundGeo = new THREE.PlaneGeometry(30, 30);
+  var groundMat = new THREE.ShadowMaterial({ opacity: 0.18 });
+  var ground = new THREE.Mesh(groundGeo, groundMat);
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -1.0;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // ========== 豆包小人建模 ==========
+  var doubao = new THREE.Group();
+
+  // 材质：白色哑光陶瓷/毛绒质感
+  var bodyMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff, roughness: 0.55, metalness: 0.05
+  });
+  var blueMat = new THREE.MeshStandardMaterial({
+    color: 0x4f8ef7, roughness: 0.4, metalness: 0.1
+  });
+  var darkMat = new THREE.MeshStandardMaterial({
+    color: 0x1a2a4a, roughness: 0.3, metalness: 0.2
+  });
+  var cheekMat = new THREE.MeshStandardMaterial({
+    color: 0xffb8c8, roughness: 0.7, metalness: 0, transparent: true, opacity: 0.8
+  });
+
+  // 身体（圆润胶囊：用两个半球 + 圆柱拼）
+  var bodyGroup = new THREE.Group();
+
+  // 主身体：稍扁的球体
+  var body = new THREE.Mesh(new THREE.SphereGeometry(0.9, 48, 48), bodyMat);
+  body.scale.set(1, 1.15, 0.95);
+  body.position.y = 0.0;
+  body.castShadow = true;
+  bodyGroup.add(body);
+
+  // 头部（大圆，跟身体自然衔接）
+  var head = new THREE.Mesh(new THREE.SphereGeometry(0.75, 48, 48), bodyMat);
+  head.position.y = 1.15;
+  head.castShadow = true;
+  bodyGroup.add(head);
+
+  // 大眼睛（两个黑球）
+  var eyeGeo = new THREE.SphereGeometry(0.13, 24, 24);
+  var eyeL = new THREE.Mesh(eyeGeo, darkMat);
+  eyeL.position.set(-0.25, 1.2, 0.62);
+  bodyGroup.add(eyeL);
+  var eyeR = new THREE.Mesh(eyeGeo, darkMat);
+  eyeR.position.set(0.25, 1.2, 0.62);
+  bodyGroup.add(eyeR);
+
+  // 眼睛高光（小白点）
+  var hlGeo = new THREE.SphereGeometry(0.04, 12, 12);
+  var hlMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  var hlL = new THREE.Mesh(hlGeo, hlMat);
+  hlL.position.set(-0.22, 1.25, 0.73);
+  bodyGroup.add(hlL);
+  var hlR = new THREE.Mesh(hlGeo, hlMat);
+  hlR.position.set(0.28, 1.25, 0.73);
+  bodyGroup.add(hlR);
+
+  // 腮红
+  var cheekGeo = new THREE.SphereGeometry(0.1, 16, 16);
+  var cheekL = new THREE.Mesh(cheekGeo, cheekMat);
+  cheekL.position.set(-0.45, 1.0, 0.55);
+  cheekL.scale.set(1, 0.7, 0.5);
+  bodyGroup.add(cheekL);
+  var cheekR = new THREE.Mesh(cheekGeo, cheekMat);
+  cheekR.position.set(0.45, 1.0, 0.55);
+  cheekR.scale.set(1, 0.7, 0.5);
+  bodyGroup.add(cheekR);
+
+  // 小嘴巴（一个小圆弧：用 TorusGeometry 下半段）
+  var mouthGeo = new THREE.TorusGeometry(0.08, 0.015, 8, 16, Math.PI);
+  var mouth = new THREE.Mesh(mouthGeo, darkMat);
+  mouth.position.set(0, 0.95, 0.68);
+  mouth.rotation.z = Math.PI;
+  bodyGroup.add(mouth);
+
+  // 头顶小呆毛（蓝色小圆球+短圆柱）
+  var tuftStem = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.18, 8), blueMat);
+  tuftStem.position.set(0, 1.95, 0);
+  bodyGroup.add(tuftStem);
+  var tuftBall = new THREE.Mesh(new THREE.SphereGeometry(0.07, 16, 16), blueMat);
+  tuftBall.position.set(0, 2.07, 0);
+  bodyGroup.add(tuftBall);
+
+  // 小短手
+  var armGeo = new THREE.SphereGeometry(0.2, 24, 24);
+  var armL = new THREE.Mesh(armGeo, bodyMat);
+  armL.position.set(-0.85, 0.1, 0);
+  armL.scale.set(0.7, 1.2, 0.7);
+  armL.castShadow = true;
+  bodyGroup.add(armL);
+  var armR = new THREE.Mesh(armGeo, bodyMat);
+  armR.position.set(0.85, 0.1, 0);
+  armR.scale.set(0.7, 1.2, 0.7);
+  armR.castShadow = true;
+  bodyGroup.add(armR);
+
+  // 小短脚（蓝色圆墩）
+  var footGeo = new THREE.SphereGeometry(0.22, 24, 24);
+  var footL = new THREE.Mesh(footGeo, blueMat);
+  footL.position.set(-0.35, -0.85, 0.1);
+  footL.scale.set(1, 0.6, 1.2);
+  footL.castShadow = true;
+  bodyGroup.add(footL);
+  var footR = new THREE.Mesh(footGeo, blueMat);
+  footR.position.set(0.35, -0.85, 0.1);
+  footR.scale.set(1, 0.6, 1.2);
+  footR.castShadow = true;
+  bodyGroup.add(footR);
+
+  // 肚子上的蓝色小徽章
+  var badge = new THREE.Mesh(new THREE.CircleGeometry(0.18, 32), blueMat);
+  badge.position.set(0, 0.1, 0.82);
+  bodyGroup.add(badge);
+  var badgeInner = new THREE.Mesh(
+    new THREE.CircleGeometry(0.1, 32),
+    new THREE.MeshBasicMaterial({ color: 0xffffff })
+  );
+  badgeInner.position.set(0, 0.1, 0.825);
+  bodyGroup.add(badgeInner);
+
+  doubao.add(bodyGroup);
+  doubao.position.y = 0.1;
+  scene.add(doubao);
+
+  // ========== 控制器 ==========
+  var controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.target.set(0, 0.3, 0);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 3;      // 最近缩放距离
+  controls.maxDistance = 15;      // 最远缩放距离
+  controls.minPolarAngle = 0.2;   // 不能钻到地面以下
+  controls.maxPolarAngle = Math.PI / 2 - 0.05;
+  controls.autoRotate = false;
+  controls.autoRotateSpeed = 2.5;
+  controls.update();
+
+  // ========== 视角按钮 ==========
+  var viewPositions = {
+    front: { pos: [0, 1.5, 7],  target: [0, 0.3, 0] },
+    side:  { pos: [7, 1.5, 0],  target: [0, 0.3, 0] },
+    back:  { pos: [0, 1.5, -7], target: [0, 0.3, 0] },
+    top:   { pos: [0, 7.5, 0.01], target: [0, 0, 0] },
+    reset: { pos: [0, 1.5, 7],  target: [0, 0.3, 0] }
+  };
+
+  function setView(name) {
+    var v = viewPositions[name];
+    if (!v) return;
+    // 平滑过渡到目标位置
+    var startPos = camera.position.clone();
+    var endPos = new THREE.Vector3(v.pos[0], v.pos[1], v.pos[2]);
+    var startTarget = controls.target.clone();
+    var endTarget = new THREE.Vector3(v.target[0], v.target[1], v.target[2]);
+    var startTime = performance.now();
+    var duration = 600;
+
+    function tween() {
+      var t = Math.min((performance.now() - startTime) / duration, 1);
+      var e = 1 - Math.pow(1 - t, 3); // easeOutCubic
+      camera.position.lerpVectors(startPos, endPos, e);
+      controls.target.lerpVectors(startTarget, endTarget, e);
+      controls.update();
+      if (t < 1) requestAnimationFrame(tween);
+    }
+    tween();
+
+    // 更新按钮高亮
+    document.querySelectorAll('.controls button[data-view]').forEach(function (btn) {
+      btn.classList.toggle('active', btn.dataset.view === name);
+    });
+  }
+
+  document.querySelectorAll('.controls button[data-view]').forEach(function (btn) {
+    btn.addEventListener('click', function () { setView(btn.dataset.view); });
+  });
+
+  // 自动旋转开关
+  var autoBtn = document.getElementById('auto-rotate');
+  autoBtn.addEventListener('click', function () {
+    controls.autoRotate = !controls.autoRotate;
+    autoBtn.textContent = '自动旋转：' + (controls.autoRotate ? '开' : '关');
+    autoBtn.classList.toggle('active', controls.autoRotate);
+  });
+
+  // ========== 渲染循环 ==========
+  var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function animate() {
+    requestAnimationFrame(animate);
+    if (!reduceMotion) {
+      // 轻微呼吸感：身体微小缩放
+      var s = 1 + Math.sin(performance.now() * 0.0015) * 0.005;
+      body.scale.set(s, s, s);
+    }
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  // ========== 窗口自适应 ==========
+  window.addEventListener('resize', function () {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // 首帧标记（供自检读取）
+  window.__doubao3dReady = true;
+})();
+</script>
+</body>
+</html>

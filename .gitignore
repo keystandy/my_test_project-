@@ -1,0 +1,17 @@
+# 自检截图过程产物
+_shots/
+
+# 系统/编辑器垃圾
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
+*.user
+
+# 编译产物
+__pycache__/
+*.pyc
+build/
+debug/
+release/
+*.exe
